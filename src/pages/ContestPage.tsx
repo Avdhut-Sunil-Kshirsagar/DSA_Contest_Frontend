@@ -196,7 +196,7 @@ const ContestPage: React.FC = () => {
           <p className="text-gray-600 mb-6">Please log in to access contest preparation.</p>
           <button
             onClick={() => navigate('/login', { state: { from: `/contests/${id}` } })}
-            className="btn btn-primary"
+            className="px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold rounded-lg shadow hover:from-blue-700 hover:to-purple-700"
           >
             Go to Login
           </button>
@@ -274,8 +274,8 @@ const ContestPage: React.FC = () => {
             <h3 className="font-medium text-blue-900 mb-2">Contest Rules</h3>
             <ul className="text-sm text-blue-800 space-y-1">
               <li>• Internet must be turned off during the contest</li>
-              <li>• You have 2 hours to solve 3 DSA problems</li>
-              <li>• Each problem has 10 test cases</li>
+              <li>• Duration depends on the contest data</li>
+              <li>• Each problem has multiple test cases</li>
               <li>• Code execution is completely offline</li>
               <li>• Submit only when all test cases pass</li>
             </ul>
@@ -307,11 +307,11 @@ const ContestPage: React.FC = () => {
           </div>
 
           {/* Action Buttons */}
-          <div className="flex space-x-4">
+          <div className="flex flex-wrap gap-4">
             {!isContestReady && !isPreparing && (
               <button
                 onClick={handlePrepareContest}
-                className="btn btn-primary flex items-center space-x-2"
+                className="px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-semibold rounded-lg shadow hover:from-blue-700 hover:to-blue-800 flex items-center space-x-2"
               >
                 <Download className="h-4 w-4" />
                 <span>Prepare Contest</span>
@@ -322,10 +322,10 @@ const ContestPage: React.FC = () => {
               <button
                 onClick={handleStartContest}
                 disabled={internetStatus.isOnline}
-                className={`btn flex items-center space-x-2 ${
+                className={`px-6 py-3 font-semibold rounded-lg shadow flex items-center space-x-2 ${
                   internetStatus.isOnline 
-                    ? 'btn-secondary opacity-50 cursor-not-allowed' 
-                    : 'btn-primary'
+                    ? 'bg-gray-200 text-gray-500 cursor-not-allowed' 
+                    : 'bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:from-green-700 hover:to-emerald-700'
                 }`}
               >
                 <Play className="h-4 w-4" />
@@ -336,7 +336,7 @@ const ContestPage: React.FC = () => {
             {isContestReady && (
               <button
                 onClick={handleResetPreparation}
-                className="btn btn-outline"
+                className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
               >
                 Reset Preparation
               </button>
@@ -355,32 +355,16 @@ const ContestPage: React.FC = () => {
           )}
         </div>
 
-        {/* Contest Problems Preview */}
+        {/* Preparation Tips instead of Problems Preview */}
         {isContestReady && (
           <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-xl font-semibold text-gray-900 mb-4">Contest Problems</h2>
-            <div className="space-y-4">
-              {(contest?.problems || []).map((p: any, idx: number) => (
-                <div key={p.problemId?._id || idx} className="border border-gray-200 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="font-medium text-gray-900">{idx + 1}. {p.problemId?.title}</h3>
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${
-                      p.problemId?.difficulty === 'Easy' ? 'bg-green-100 text-green-800' :
-                      p.problemId?.difficulty === 'Medium' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
-                    }`}>
-                      {p.problemId?.difficulty}
-                    </span>
-                  </div>
-                  <p className="text-sm text-gray-600 line-clamp-2">
-                    {p.problemId?.description}
-                  </p>
-                  <div className="flex items-center space-x-4 mt-2 text-xs text-gray-500">
-                    <span>{p.problemId?.testCases?.length || 0} test case(s)</span>
-                    <span>{(p.problemId?.timeLimit || 1000)}ms time limit</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <h2 className="text-xl font-semibold text-gray-900 mb-4">Preparation Tips</h2>
+            <ul className="list-disc pl-6 space-y-2 text-gray-700 text-sm">
+              <li>Test your code locally with sample test cases before starting.</li>
+              <li>Keep internet turned off during the contest to avoid penalties.</li>
+              <li>Read constraints carefully; optimize for time and memory limits.</li>
+              <li>Submit only when all visible tests pass in the offline runner.</li>
+            </ul>
           </div>
         )}
       </div>

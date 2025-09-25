@@ -9,7 +9,7 @@ import { internetMonitor } from '../utils/internetMonitor';
 import type { InternetStatus } from '../utils/internetMonitor';
 import { userStateManager } from '../utils/userStateManager';
 import api from '../utils/api';
-import type { Contest, Problem as BackendProblem } from '../lib/api';
+import type { Problem as BackendProblem } from '../lib/api';
 import { FadeInUp } from '../components/animations';
 import toast from 'react-hot-toast';
 import {
@@ -36,7 +36,7 @@ const EnhancedProblemSolver: React.FC = () => {
   const { user } = useAuth();
 
   // State management
-  const [contest, setContest] = useState<Contest | null>(null); // reserved for future use
+  // contest state is not currently used; timer derives from cached contest duration
   const [problems, setProblems] = useState<BackendProblem[]>([]);
   const [problem, setProblem] = useState<BackendProblem | null>(null);
   const [code, setCode] = useState<string>('');
@@ -121,7 +121,6 @@ const EnhancedProblemSolver: React.FC = () => {
   // Ensure a problem is selected once problems are available
   useEffect(() => {
     if (!problem && problems.length > 0) {
-      console.log('[Play] problems array populated, selecting first problem');
       const first = problems[0] as any;
       setProblem(first);
       const templates = first?.codeTemplates ?? {};
@@ -143,27 +142,21 @@ const EnhancedProblemSolver: React.FC = () => {
         const cachedProblems = localStorage.getItem(`contest_problems_${cid}`);
         const problemMapStr = localStorage.getItem(`contest_problem_map_${cid}`);
         if (!cachedContest && !cachedProblems) {
-          console.warn('[Play] No cached contest or problems found for', cid);
           return null;
         }
         const contestData = cachedContest ? JSON.parse(cachedContest) : null;
         const problemsData = cachedProblems ? JSON.parse(cachedProblems) : null;
         const problemMap = problemMapStr ? JSON.parse(problemMapStr) : {};
-        // If dedicated problems cache exists, prefer it
         if (problemsData) {
-          // If any problem is only an id, expand from map if available
           const expanded = (problemsData || []).map((p: any) => {
             if (p && typeof p === 'string' && problemMap[p]) return problemMap[p];
             if (p && p._id && problemMap[p._id]) return problemMap[p._id];
             return p;
           });
-          console.log('[Play] Loaded problems from cache:', { count: expanded.length, ids: expanded.map((x: any) => x?._id) });
           return { ...(contestData || {}), problems: expanded.map((p: any, idx: number) => ({ problemId: p, order: idx + 1 })) };
         }
-        console.log('[Play] Loaded contest from cache without problems array');
         return contestData;
       } catch {
-        console.error('[Play] Failed to parse cache for contest', cid);
         return null;
       }
     };
@@ -175,28 +168,32 @@ const EnhancedProblemSolver: React.FC = () => {
     };
 
     const hydrateFromData = (data: any) => {
-      console.log('[Play] Hydrating contest data', { hasProblems: Array.isArray(data?.problems), problemsLen: data?.problems?.length });
-      setContest(data);
+
+      // Initialize timer from contest duration if present
+      const durationMs = Number(data?.duration) || 0;
+      if (durationMs > 0) {
+        const seconds = Math.max(1, Math.floor(durationMs / 1000));
+        setTimeLeft(seconds);
+      } else if (timeLeft === 0) {
+        // Fallback default 90 minutes only if not set by saved state
+        setTimeLeft(5400);
+      }
 
       // Normalize problems from cache or API
       const rawProblems: any[] = Array.isArray(data.problems) ? data.problems : [];
       const normalized: BackendProblem[] = rawProblems
         .sort((a: any, b: any) => (a?.order || 0) - (b?.order || 0))
         .map((entry: any) => {
-          // Accept shapes: { problemId: Problem } OR Problem directly
           if (entry && entry.problemId && typeof entry.problemId === 'object') {
             return entry.problemId as BackendProblem;
           }
           return entry as BackendProblem;
         })
-        // Relax filter: allow items with id and title; description may be absent
         .filter((p: any) => p && (p._id || p.id) && p.title);
 
-      console.log('[Play] Normalized problems', { count: normalized.length, titles: normalized.map((p: any) => p?.title) });
       setProblems(normalized);
       setCurrentProblemIndex(0);
 
-      // Ensure first problem is set to avoid indefinite "Loading problem..."
       if (normalized.length > 0) {
         const first = normalized[0];
         setProblem(first);
@@ -204,39 +201,29 @@ const EnhancedProblemSolver: React.FC = () => {
           if (templates && templates[language as keyof any]) {
             setCode(templates[language as keyof any]);
         } else {
-          console.warn('[Play] No codeTemplates for first problem or language');
           setCode('');
         }
-      } else {
-        console.warn('[Play] No problems after normalization. Check cache and API response structure.');
       }
     };
 
     const fetchContest = async () => {
       if (!id) {
-        console.warn('[Play] No contest id in route params');
         return;
       }
 
-      // If browser is offline, try cache immediately
       if (typeof navigator !== 'undefined' && navigator.onLine === false) {
         const cached = loadFromCache(id);
         if (cached) {
           hydrateFromData(cached);
-          return; // silent offline load
+          return;
         }
-        console.warn('[Play] Offline and no cache available for contest', id);
         return;
       }
 
       try {
-        console.log('[Play] Fetching contest from API', id);
         const res = await api.get(`/contests/${id}`);
         const data = res.data?.data as any;
-        console.log('[Play] API contest fetched', { problems: Array.isArray(data?.problems) ? data.problems.length : 0 });
-        // save fresh to cache and hydrate
         saveToCache(id, data);
-        // also cache normalized problems array and problem map for direct play-page consumption
         try {
           const rawProblems: any[] = Array.isArray(data?.problems) ? data.problems : [];
           const normalizedProblems = rawProblems
@@ -247,17 +234,14 @@ const EnhancedProblemSolver: React.FC = () => {
           const problemMap: Record<string, any> = {};
           normalizedProblems.forEach((p: any) => { if (p && p._id) problemMap[p._id] = p; });
           localStorage.setItem(`contest_problem_map_${id}`, JSON.stringify(problemMap));
-          console.log('[Play] Cached problems and map', { problems: normalizedProblems.length, mapKeys: Object.keys(problemMap).length });
         } catch {}
         hydrateFromData(data);
       } catch (e: any) {
-        // On failure (timeout, network), try cache fallback
         const cached = loadFromCache(id);
         if (cached) {
           hydrateFromData(cached);
-          return; // silent fallback
+          return;
         }
-        console.error('[Play] Failed to load contest from API and no cache fallback', e);
       }
     };
 
@@ -270,19 +254,17 @@ const EnhancedProblemSolver: React.FC = () => {
       const stateWasReset = userStateManager.checkAndResetUserState(user.id);
 
       if (stateWasReset) {
-        // Reset all contest state for new user
         setContestStarted(false);
         setCurrentProblemIndex(0);
         setProblemResults([]);
         setContestCompleted(false);
-        setTimeLeft(5400);
+        setTimeLeft((prev) => prev > 0 ? prev : 5400);
         setContestStartTime(Date.now());
         setViolationCount(0);
         setPenaltyPoints(0);
         setShowFinalSubmission(false);
         if (problems[0]) setProblem(problems[0]);
 
-        // Clear any existing monitoring
         internetMonitor.stopMonitoring();
 
         toast.success('Welcome! Contest state has been reset for new user.');
@@ -290,17 +272,11 @@ const EnhancedProblemSolver: React.FC = () => {
     }
   }, [user?.id]);
 
-  // Initialize contest timer to 1:30 hours (90 minutes) and auto-start contest
+  // Initialize contest timer from saved state or start fresh
   useEffect(() => {
-    // Check internet status immediately on mount and set up manual monitoring
     const initializeInternetMonitoring = async () => {
-      // First check UI element directly
       checkInternetStatusFromUI();
-
-      // Also perform regular check
       await manualInternetCheck();
-
-      // If contest is started, set up continuous monitoring
       if (contestStarted && !contestCompleted) {
         internetMonitor.startMonitoring(2000);
       }
@@ -308,7 +284,6 @@ const EnhancedProblemSolver: React.FC = () => {
 
     initializeInternetMonitoring();
 
-    // Only load saved state if user hasn't changed
     if (user?.id && userStateManager.isSameUser(user.id)) {
       const savedContestState = localStorage.getItem('contest_state');
       if (savedContestState) {
@@ -318,42 +293,34 @@ const EnhancedProblemSolver: React.FC = () => {
           setCurrentProblemIndex(state.currentProblemIndex || 0);
           setProblemResults(state.problemResults || []);
           setContestCompleted(state.contestCompleted || false);
-          setTimeLeft(state.timeLeft || 5400);
+          setTimeLeft(state.timeLeft || timeLeft || 0);
           setContestStartTime(state.contestStartTime || Date.now());
           setViolationCount(state.violationCount || 0);
           setPenaltyPoints(state.penaltyPoints || 0);
 
-          // Load the current problem based on saved index
           if (state.currentProblemIndex !== undefined && problems[state.currentProblemIndex]) {
             setProblem(problems[state.currentProblemIndex]);
           }
 
-          // If contest was completed, show final submission modal
           if (state.contestCompleted) {
             setShowFinalSubmission(true);
-          }
-          // If contest was started but not completed, resume monitoring
-          else if (state.contestStarted && !state.contestCompleted) {
+          } else if (state.contestStarted && !state.contestCompleted) {
             internetMonitor.startMonitoring(2000);
           }
         } catch (error) {
-          console.error('Failed to load contest state:', error);
-          // Fallback to default state
-          setTimeLeft(5400);
+          setTimeLeft((prev) => prev > 0 ? prev : 5400);
           if (!contestStarted) {
             startContest();
           }
         }
       } else {
-        // No saved state, start fresh
-        setTimeLeft(5400);
+        setTimeLeft((prev) => prev > 0 ? prev : 5400);
         if (!contestStarted) {
           startContest();
         }
       }
     } else if (user?.id) {
-      // New user, start fresh
-      setTimeLeft(5400);
+      setTimeLeft((prev) => prev > 0 ? prev : 5400);
       if (!contestStarted) {
         startContest();
       }
@@ -370,25 +337,15 @@ const EnhancedProblemSolver: React.FC = () => {
 
   // Internet monitoring
   useEffect(() => {
-    // Initialize internet status on component mount
     const currentStatus = internetMonitor.getCurrentStatus();
     setInternetStatus(currentStatus);
 
-    // Perform an immediate check to ensure accurate status
     internetMonitor.performCheck().then(() => {
-      // After the check completes, get the updated status
       const updatedStatus = internetMonitor.getCurrentStatus();
       setInternetStatus(updatedStatus);
 
-      // Check if internet is online on page load/refresh during contest
       if (contestStarted && !contestCompleted && updatedStatus.isOnline) {
-        // Always apply penalty if internet is online during contest
-        // This covers both page refresh and normal internet violations
         const lastStatus = localStorage.getItem('last_internet_status');
-
-        // Apply penalty if:
-        // 1. This is a page refresh (no previous status or recent page load)
-        // 2. Internet was offline and now online
         const pageLoadTime = Date.now();
         const lastPageLoad = localStorage.getItem('last_page_load_time');
         const timeSinceLastLoad = lastPageLoad ? pageLoadTime - parseInt(lastPageLoad) : 0;
@@ -397,8 +354,6 @@ const EnhancedProblemSolver: React.FC = () => {
           setIsPageRefresh(timeSinceLastLoad < 5000);
           handleInternetViolation();
         }
-
-        // Store current status and page load time
         localStorage.setItem('last_internet_status', 'online');
         localStorage.setItem('last_page_load_time', pageLoadTime.toString());
       } else if (updatedStatus.isOnline === false) {
@@ -409,13 +364,7 @@ const EnhancedProblemSolver: React.FC = () => {
     const unsubscribe = internetMonitor.subscribe((status) => {
       const previousStatus = internetStatus;
       setInternetStatus(status);
-
-      // Store status for next page load check
       localStorage.setItem('last_internet_status', status.isOnline ? 'online' : 'offline');
-
-      // Check for internet violations during contest ONLY
-      // Violation occurs when internet goes from offline to online during contest
-      // NO violations after contest completion
       if (contestStarted && !contestCompleted && status.isOnline && !previousStatus.isOnline) {
         handleInternetViolation();
       }
@@ -427,19 +376,13 @@ const EnhancedProblemSolver: React.FC = () => {
   // Enhanced internet monitoring for page refresh scenarios
   useEffect(() => {
     if (contestStarted && !contestCompleted) {
-      // Set up a more aggressive monitoring for page refresh scenarios
       const checkInterval = setInterval(async () => {
         try {
-          // First check UI element directly
           const uiStatus = checkInternetStatusFromUI();
-
-          // Also perform regular internet check
           await internetMonitor.performCheck();
           const currentStatus = internetMonitor.getCurrentStatus();
 
-          // Use UI status if it's different from monitor status
           if (uiStatus.isOnline !== currentStatus.isOnline) {
-            console.log('UI and monitor status mismatch, using UI status');
             setInternetStatus({
               isOnline: uiStatus.isOnline,
               lastChecked: new Date(),
@@ -449,12 +392,10 @@ const EnhancedProblemSolver: React.FC = () => {
             setInternetStatus(currentStatus);
           }
 
-          // Check for violations
           const finalStatus = uiStatus.isOnline !== currentStatus.isOnline ? uiStatus : currentStatus;
           if (finalStatus.isOnline) {
             const lastStatus = localStorage.getItem('last_internet_status');
             if (lastStatus === 'offline') {
-              // Internet came back online - apply penalty
               handleInternetViolation();
             }
             localStorage.setItem('last_internet_status', 'online');
@@ -462,22 +403,26 @@ const EnhancedProblemSolver: React.FC = () => {
             localStorage.setItem('last_internet_status', 'offline');
           }
         } catch (error) {
-          console.error('Internet check failed:', error);
+          // ignore
         }
-      }, 2000); // Check every 2 seconds
+      }, 2000);
 
       return () => clearInterval(checkInterval);
     }
   }, [contestStarted, contestCompleted]);
 
-  // Contest timer
+  // Contest timer with auto complete on timeout
   useEffect(() => {
     if (contestStarted && timeLeft > 0) {
       const timer = setInterval(() => {
         setTimeLeft(prev => {
           if (prev <= 1) {
-            setContestStarted(false);
+            // End contest on timeout exactly once
+            if (!contestCompleted) {
             toast.error('Contest time is up!');
+              setContestStarted(false);
+              completeContest();
+            }
             return 0;
           }
           return prev - 1;
@@ -486,7 +431,7 @@ const EnhancedProblemSolver: React.FC = () => {
 
       return () => clearInterval(timer);
     }
-  }, [contestStarted, timeLeft]);
+  }, [contestStarted, timeLeft, contestCompleted]);
 
   // Save contest state whenever it changes
   useEffect(() => {
@@ -503,7 +448,6 @@ const EnhancedProblemSolver: React.FC = () => {
     setPenaltyPoints(prev => prev + 10);
     setShowInternetWarning(true);
 
-    // Show violation message with more details
     const violationMessage = isPageRefresh
       ? '🚨 Page refresh with internet ON detected! 10 points penalty applied.'
       : '🚨 Internet violation detected! 10 points will be deducted from your final score.';
@@ -518,40 +462,31 @@ const EnhancedProblemSolver: React.FC = () => {
       }
     });
 
-    // Auto-hide warning after 10 seconds
     setTimeout(() => {
       setShowInternetWarning(false);
-      setIsPageRefresh(false); // Reset page refresh flag
+      setIsPageRefresh(false);
     }, 10000);
   };
 
-  // Build harness preview based on current problem
   const buildHarnessSnippet = (_lang: string) => {
     if (!problem) return "// No problem loaded";
-    
-    // Get harness code for current language
     const harsh = (problem as any).harshnessCode || (problem as any).harnessCode;
     let harnessCode = '';
-    
     if (typeof harsh === 'object' && harsh !== null) {
       harnessCode = String(harsh[language as keyof any] || '').trim();
     } else if (typeof harsh === 'string' && harsh.trim().length > 0) {
       harnessCode = harsh.trim();
     }
-    
-    if (harnessCode) {
-      return harnessCode;
-    }
-    
+    if (harnessCode) return harnessCode;
     const firstTestCase = problem.testCases?.[0];
     if (!firstTestCase) return "// No test cases available";
     return "// Harness preview is not provided for this problem";
   };
 
-  const runCode = async () => {
+  const runCode = async (): Promise<ExecutionResult[] | undefined> => {
     if (!problem || !code.trim()) {
       toast.error('Please write some code first');
-      return;
+      return undefined;
     }
 
     setIsRunning(true);
@@ -560,7 +495,6 @@ const EnhancedProblemSolver: React.FC = () => {
 
     try {
       const tests = (problem.testCases || []).slice(0, 2);
-      // Combine user code with harness like backend
       const rawHarness: any = (problem as any).harshnessCode || (problem as any).harnessCode || '';
       let harnessToUse = '';
       if (rawHarness && typeof rawHarness === 'object') {
@@ -596,10 +530,11 @@ const EnhancedProblemSolver: React.FC = () => {
         setOutput(`Test failed\nInput: ${failedResult?.testCase.input}\nExpected: ${failedResult?.testCase.expectedOutput}\nYour Output: ${failedResult?.output || '<empty>'}`);
         toast.error(`${passedTests}/${totalTests} test cases passed`);
       }
+      return results;
     } catch (error) {
       setOutput(`Run error: ${error}`);
       toast.error('Failed to run code');
-      console.error('Code execution error:', error);
+      return undefined;
     } finally {
       setIsRunning(false);
     }
@@ -613,17 +548,21 @@ const EnhancedProblemSolver: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      // Calculate score based on test results
-      const passedTests = testResults.filter(r => r.passed).length;
-      const totalTests = testResults.length;
+      // Ensure we have fresh test results if user didn't click Run
+      let resultsToUse: ExecutionResult[] | undefined = testResults;
+      if (!resultsToUse || resultsToUse.length === 0) {
+        resultsToUse = await runCode();
+      }
+      const safeResults: ExecutionResult[] = Array.isArray(resultsToUse) ? resultsToUse : [];
+
+      const passedTests = safeResults.filter(r => r.passed).length;
+      const totalTests = safeResults.length;
       const score = totalTests > 0 ? Math.round((passedTests / totalTests) * 100) : 0;
 
-      // Calculate time taken for this problem
       const currentTime = Date.now();
       const timeTaken = currentTime - contestStartTime;
       const timeFormatted = formatTime(Math.floor(timeTaken / 1000));
 
-      // Save problem result to localStorage
       const problemResult = {
         userId: user?.id,
         problemId: (problem as any)._id,
@@ -632,7 +571,7 @@ const EnhancedProblemSolver: React.FC = () => {
         time: timeFormatted,
         language: language,
         code: code,
-        testResults: testResults,
+        testResults: safeResults,
         timestamp: new Date().toISOString()
       };
 
@@ -644,19 +583,11 @@ const EnhancedProblemSolver: React.FC = () => {
 
       toast.success(`✅ Problem ${problem.title} completed! Score: ${score}/100`);
 
-      // Check if all 3 problems are done in current session
-      // Use currentProblemIndex to determine if this was the last problem (index 2 = 3rd problem)
-      console.log(`Problem ${currentProblemIndex + 1} completed. Current index: ${currentProblemIndex}, Total problems: ${problems.length}`);
-
-      if (currentProblemIndex >= 2) {
-        console.log('All 3 problems completed, finishing contest...');
-        // Small delay to show success message before completing contest
+      if (currentProblemIndex >= 2 || existingResults.length >= problems.length) {
         setTimeout(() => {
           completeContest();
         }, 1500);
       } else {
-        console.log(`Loading next problem (${currentProblemIndex + 2})...`);
-        // Small delay to show success message before loading next problem
         setTimeout(() => {
           loadNextProblem();
         }, 1500);
@@ -671,13 +602,8 @@ const EnhancedProblemSolver: React.FC = () => {
 
   const loadNextProblem = () => {
     const nextIndex = currentProblemIndex + 1;
-    console.log(`Loading next problem: currentIndex=${currentProblemIndex}, nextIndex=${nextIndex}, problems.length=${problems.length}`);
-
     if (nextIndex < problems.length) {
       const nextProblem = problems[nextIndex];
-      console.log(`Loading problem: ${nextProblem.title} (ID: ${nextProblem._id})`);
-
-      // Update all states for the next problem
       setProblem(nextProblem);
       setCurrentProblemIndex(nextIndex);
       setCode('');
@@ -686,23 +612,12 @@ const EnhancedProblemSolver: React.FC = () => {
       setShowConsole(false);
       setShowHarness(false);
 
-      // Load the code template for the new problem
       const templates = (nextProblem as any).codeTemplates;
       if (templates && templates[language as keyof any]) {
         setCode(templates[language as keyof any]);
       } else {
         setCode('');
       }
-
-      toast.success(`🎯 Problem ${nextIndex + 1}: ${nextProblem.title} loaded!`);
-
-      // Scroll to top of problem description
-      const problemPanel = document.querySelector('.problem-description-panel');
-      if (problemPanel) {
-        problemPanel.scrollTop = 0;
-      }
-    } else {
-      console.log('No more problems to load, should complete contest');
     }
   };
 
@@ -710,30 +625,30 @@ const EnhancedProblemSolver: React.FC = () => {
     setContestCompleted(true);
     setShowFinalSubmission(true);
 
-    // Stop internet monitoring - no more penalties after contest completion
     internetMonitor.stopMonitoring();
 
-    // Calculate final score (penalties applied but no new penalties during submission)
     const totalScore = problemResults.reduce((sum, result) => sum + result.score, 0);
-    const finalScore = totalScore - penaltyPoints; // Allow negative scores
+    const finalScore = totalScore - penaltyPoints;
+
+    const minimalProblemResults = (problemResults || []).map((r: any) => ({
+      problemId: r.problemId,
+      score: Number(r.score) || 0
+    }));
 
     const finalResult = {
       userId: user?.id,
       contestId: id,
-      totalScore: finalScore, // Final score with penalty deduction
-      penaltyPoints: penaltyPoints, // Penalty points for record keeping
-      problemResults: problemResults,
+      totalScore: finalScore,
+      penaltyPoints: penaltyPoints,
+      problemResults: minimalProblemResults,
       totalTime: formatTime(Math.floor((Date.now() - contestStartTime) / 1000)),
       timestamp: new Date().toISOString()
     };
 
     localStorage.setItem('final_contest_result', JSON.stringify(finalResult));
-
-    // Clear contest state since contest is completed
     localStorage.removeItem('contest_state');
 
-    // Show celebration message
-    toast.success('🎉 Contest Completed! All 3 problems solved!', {
+    toast.success('🎉 Contest Completed! All problems processed!', {
       duration: 5000,
       style: {
         background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
@@ -743,7 +658,6 @@ const EnhancedProblemSolver: React.FC = () => {
       }
     });
 
-    // Show final submission modal after a short delay
     setTimeout(() => {
       setShowFinalSubmission(true);
     }, 2000);
@@ -758,9 +672,45 @@ const EnhancedProblemSolver: React.FC = () => {
     const maxRetries = 3;
 
     try {
-      const finalResult = JSON.parse(localStorage.getItem('final_contest_result') || '{}');
+      // Load or construct final result payload to match backend expectations
+      let finalResult: any = {};
+      try {
+        const stored = localStorage.getItem('final_contest_result');
+        finalResult = stored ? JSON.parse(stored) : {};
+      } catch {}
 
-      // Submit to server using the configured API
+      if (!finalResult || !finalResult.userId || !finalResult.contestId) {
+        const computedTotalScore = problemResults.reduce((sum, r) => sum + (Number(r.score) || 0), 0);
+        finalResult = {
+          userId: user?.id,
+          contestId: id,
+          totalScore: computedTotalScore - penaltyPoints,
+          penaltyPoints: penaltyPoints,
+          problemResults: (problemResults || []).map((r: any) => ({
+            problemId: r.problemId,
+            score: Number(r.score) || 0
+          })),
+          totalTime: formatTime(Math.floor((Date.now() - contestStartTime) / 1000)),
+          timestamp: new Date().toISOString()
+        };
+      } else {
+        // Normalize types and strip unnecessary fields
+        finalResult.userId = finalResult.userId || user?.id;
+        finalResult.contestId = finalResult.contestId || id;
+        finalResult.penaltyPoints = Number(finalResult.penaltyPoints) || 0;
+        finalResult.totalScore = Number(finalResult.totalScore) || 0;
+        finalResult.totalTime = String(finalResult.totalTime || formatTime(Math.floor((Date.now() - contestStartTime) / 1000)));
+        finalResult.problemResults = (finalResult.problemResults || []).map((r: any) => ({
+          problemId: r.problemId,
+          score: Number(r.score) || 0
+        }));
+      }
+
+      if (!finalResult.userId || !finalResult.contestId) {
+        toast.error('Missing user or contest information for final submission');
+        return;
+      }
+
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
       const response = await fetch(`${API_URL}/api/submissions/final`, {
         method: 'POST',
@@ -772,42 +722,39 @@ const EnhancedProblemSolver: React.FC = () => {
       });
 
       if (response.ok) {
-        const result = await response.json();
+        await response.json();
         toast.success('Final results submitted successfully!');
-        console.log('Submission successful:', result);
         setShowFinalSubmission(false);
-
-        // Redirect to home page after successful submission
         setTimeout(() => {
           navigate('/');
         }, 2000);
       } else {
-        const errorData = await response.json().catch(() => ({ message: 'Server error' }));
-        throw new Error(`Server error: ${errorData.message || 'Unknown error'}`);
+        let errorMessage = 'Server error';
+        try {
+          const text = await response.text();
+          try {
+            const data = JSON.parse(text);
+            errorMessage = data?.message || errorMessage;
+          } catch {
+            errorMessage = text || errorMessage;
+          }
+        } catch {}
+        throw new Error(errorMessage);
       }
     } catch (error: any) {
-      console.error(`Submission error (attempt ${retryCount + 1}):`, error);
-
       if (retryCount < maxRetries - 1) {
-        // Retry after a delay
-        const delay = Math.pow(2, retryCount) * 1000; // Exponential backoff: 1s, 2s, 4s
-        toast.error(`Submission failed. Retrying in ${delay / 1000} seconds... (Attempt ${retryCount + 1}/${maxRetries})`);
-
+        const delay = Math.pow(2, retryCount) * 1000;
+        toast.error(`Submission failed: ${error?.message || 'Unknown error'}. Retrying in ${Math.floor(delay / 1000)}s... (${retryCount + 1}/${maxRetries})`);
         setTimeout(() => {
           submitFinalResults(retryCount + 1);
         }, delay);
       } else {
-        // All retries exhausted
-        toast.error(`Failed to submit after ${maxRetries} attempts. Results saved locally.`);
-
-        // Check if it's a network error
+        toast.error(`Failed to submit after ${maxRetries} attempts: ${error?.message || 'Unknown error'}. Results saved locally.`);
         if (error.name === 'TypeError' && error.message.includes('fetch')) {
           toast.error('Unable to connect to server. Please check your internet connection.');
         } else {
           toast.error('Server error. Please try again later.');
         }
-
-        // Close modal and redirect to home page after showing error
         setTimeout(() => {
           setShowFinalSubmission(false);
           navigate('/');
@@ -816,7 +763,6 @@ const EnhancedProblemSolver: React.FC = () => {
     }
   };
 
-  // Save contest state to localStorage
   const saveContestState = () => {
     const contestState = {
       contestStarted,
@@ -836,7 +782,6 @@ const EnhancedProblemSolver: React.FC = () => {
     setContestStartTime(Date.now());
     internetMonitor.startMonitoring(2000);
 
-    // Clear previous contest results to start fresh
     localStorage.removeItem('contest_results');
     localStorage.removeItem('final_contest_result');
     setProblemResults([]);
@@ -845,17 +790,12 @@ const EnhancedProblemSolver: React.FC = () => {
     setContestCompleted(false);
     setShowFinalSubmission(false);
 
-    // Check internet status immediately when contest starts
     internetMonitor.performCheck().then(() => {
       const status = internetMonitor.getCurrentStatus();
       setInternetStatus(status);
-
-      // If internet is online when contest starts, show warning
       if (status.isOnline) {
         toast.error('⚠️ Internet is ON! Please turn off your internet connection to avoid penalties.');
       }
-
-      // Store initial internet status and page load time
       localStorage.setItem('last_internet_status', status.isOnline ? 'online' : 'offline');
       localStorage.setItem('last_page_load_time', Date.now().toString());
     });
@@ -863,14 +803,12 @@ const EnhancedProblemSolver: React.FC = () => {
     toast.success('Contest started! Internet monitoring is active.');
   };
 
-  // Manual internet check function for page refresh scenarios
   const manualInternetCheck = async () => {
     try {
       await internetMonitor.performCheck();
       const currentStatus = internetMonitor.getCurrentStatus();
       setInternetStatus(currentStatus);
 
-      // Check for violations during contest
       if (contestStarted && !contestCompleted && currentStatus.isOnline) {
         const lastStatus = localStorage.getItem('last_internet_status');
         if (lastStatus === 'offline') {
@@ -883,26 +821,19 @@ const EnhancedProblemSolver: React.FC = () => {
 
       return currentStatus;
     } catch (error) {
-      console.error('Manual internet check failed:', error);
-      return { isOnline: false, lastChecked: Date.now() };
+      return { isOnline: false, lastChecked: Date.now() } as any;
     }
   };
 
-  // Check internet status by reading UI element directly
   const checkInternetStatusFromUI = () => {
     const statusElement = document.getElementById('internet-status-text');
     if (statusElement) {
       const statusText = statusElement.textContent?.trim();
       const isOnline = statusText === 'Online';
-
-      // Update state if different from current
       if (isOnline !== internetStatus.isOnline) {
         setInternetStatus({ isOnline, lastChecked: new Date(), connectionQuality: 'good' });
-
-        // Check for violations during contest
         if (contestStarted && !contestCompleted && isOnline) {
           const lastStatus = localStorage.getItem('last_internet_status');
-          // Apply penalty if internet is online and was previously offline or this is a refresh
           if (!lastStatus || lastStatus === 'offline') {
             handleInternetViolation();
           }
@@ -911,10 +842,9 @@ const EnhancedProblemSolver: React.FC = () => {
           localStorage.setItem('last_internet_status', 'offline');
         }
       }
-
-      return { isOnline, lastChecked: new Date(), connectionQuality: 'good' };
+      return { isOnline, lastChecked: new Date(), connectionQuality: 'good' } as any;
     }
-    return { isOnline: false, lastChecked: new Date(), connectionQuality: 'offline' };
+    return { isOnline: false, lastChecked: new Date(), connectionQuality: 'offline' } as any;
   };
 
   const formatTime = (seconds: number) => {
@@ -925,13 +855,6 @@ const EnhancedProblemSolver: React.FC = () => {
   };
 
   if (!problem) {
-    console.warn('[Play] Problem not set. Current state:', {
-      problemsCount: problems.length,
-      currentProblemIndex,
-      hasContest: !!contest,
-      cachedProblems: (() => { try { return JSON.parse(localStorage.getItem(`contest_problems_${id}`) || '[]')?.length || 0; } catch { return 'err'; } })(),
-      cachedContest: !!localStorage.getItem(`contest_cache_${id}`),
-    });
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
@@ -944,7 +867,6 @@ const EnhancedProblemSolver: React.FC = () => {
 
   return (
     <div className="h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 overflow-hidden max-h-screen">
-      {/* Full Screen Internet Violation Popup */}
       {showInternetWarning && internetStatus.isOnline && (
         <div className="fixed inset-0 bg-red-600 z-50 flex items-center justify-center">
           <div className="text-center text-white p-8">
@@ -963,7 +885,7 @@ const EnhancedProblemSolver: React.FC = () => {
         </div>
       )}
 
-      {/* Ultra Modern Contest Header */}
+      {/* Header */}
       <div className="bg-gradient-to-r from-slate-800/90 to-purple-800/90 backdrop-blur-xl border-b border-white/10 shadow-2xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-20">
@@ -974,19 +896,18 @@ const EnhancedProblemSolver: React.FC = () => {
                 </div>
                 <div>
                   <h1 className="text-2xl font-bold text-white">{problem.title}</h1>
-                  <p className="text-purple-200 text-sm">Problem {currentProblemIndex + 1} of 3</p>
+                  <p className="text-purple-200 text-sm">Problem {currentProblemIndex + 1} of {Math.max(3, problems.length)}</p>
                 </div>
               </div>
-              <div className={`px-4 py-2 rounded-full text-sm font-semibold shadow-lg ${(problem?.difficulty === 'Easy') ? 'bg-gradient-to-r from-green-400 to-green-600 text-white' :
+              <div className={`${(problem?.difficulty === 'Easy') ? 'bg-gradient-to-r from-green-400 to-green-600 text-white' :
                   (problem?.difficulty === 'Medium') ? 'bg-gradient-to-r from-yellow-400 to-orange-500 text-white' :
                     'bg-gradient-to-r from-red-400 to-red-600 text-white'
-                }`}>
+                } px-4 py-2 rounded-full text-sm font-semibold shadow-lg`}>
                 {(problem?.difficulty || '').toUpperCase()}
               </div>
             </div>
 
             <div className="flex items-center space-x-6">
-              {/* Internet Status */}
               <div className="flex items-center space-x-3 bg-slate-800/50 px-4 py-2 rounded-xl backdrop-blur-sm">
                 {internetStatus.isOnline ? (
                   <Wifi className="h-5 w-5 text-green-400" />
@@ -998,7 +919,6 @@ const EnhancedProblemSolver: React.FC = () => {
                 </span>
               </div>
 
-              {/* Contest Timer */}
               {contestStarted && (
                 <div className="flex items-center space-x-3 bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-3 rounded-xl shadow-lg">
                   <Clock className="h-6 w-6 text-white" />
@@ -1008,11 +928,10 @@ const EnhancedProblemSolver: React.FC = () => {
                 </div>
               )}
 
-              {/* Problem Progress */}
               <div className="flex items-center space-x-3 bg-slate-800/50 px-4 py-2 rounded-xl backdrop-blur-sm">
                 <span className="text-sm text-purple-200 font-medium">Progress:</span>
                 <div className="flex space-x-2">
-                  {[0, 1, 2].map((index) => (
+                  {[...Array(Math.max(3, problems.length)).keys()].map((index) => (
                     <div
                       key={index}
                       className={`w-4 h-4 rounded-full transition-all duration-300 ${index < problemResults.length
@@ -1023,15 +942,6 @@ const EnhancedProblemSolver: React.FC = () => {
                               ? 'bg-gradient-to-r from-green-400 to-green-600 shadow-lg'
                               : 'bg-slate-600'
                         }`}
-                      title={
-                        index < problemResults.length
-                          ? `Problem ${index + 1} completed`
-                          : index === currentProblemIndex && !contestCompleted
-                            ? `Problem ${index + 1} current`
-                            : contestCompleted
-                              ? `All problems completed! 🎉`
-                              : `Problem ${index + 1} pending`
-                      }
                     />
                   ))}
                 </div>
@@ -1040,7 +950,6 @@ const EnhancedProblemSolver: React.FC = () => {
                 )}
               </div>
 
-              {/* Violation Count and Penalty */}
               {violationCount > 0 && (
                 <div className="flex items-center space-x-3 bg-red-600/20 px-4 py-2 rounded-xl backdrop-blur-sm border border-red-500/30">
                   <AlertTriangle className="h-5 w-5 text-red-400" />

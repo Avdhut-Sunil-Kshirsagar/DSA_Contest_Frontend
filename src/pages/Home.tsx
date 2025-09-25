@@ -43,6 +43,9 @@ const Home: React.FC = () => {
     { label: "Success Rate", value: "95%", icon: Target },
   ];
 
+  // Add local UI state for a Rules modal
+  const [showRules, setShowRules] = React.useState(false);
+
   return (
     <div className="min-h-screen">
       {/* Hero Section */}
@@ -109,13 +112,15 @@ const Home: React.FC = () => {
                 Go to Contest
                 <ArrowRight className="ml-2 sm:ml-3 h-5 w-5 sm:h-6 sm:w-6 group-hover:translate-x-1 transition-transform" />
               </Link>
-              <Link
-                to="/contests"
+
+              {/* One-click rules button opens modal */}
+              <button
+                onClick={() => setShowRules(true)}
                 className="inline-flex items-center justify-center px-6 sm:px-8 py-3 sm:py-4 text-base sm:text-lg font-bold border-2 border-white/50 text-white bg-white/10 backdrop-blur-md hover:bg-white/20 shadow-2xl transition-all duration-300 scale-100 hover:scale-105 w-full sm:w-auto rounded-lg"
               >
                 View Rules
                 <Award className="ml-2 sm:ml-3 h-5 w-5 sm:h-6 sm:w-6" />
-              </Link>
+              </button>
             </motion.div>
           </div>
         </div>
@@ -196,6 +201,39 @@ const Home: React.FC = () => {
           </div>
         </div>
       </section>
+
+      {/* Rules Modal */}
+      {showRules && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4">
+            <div className="px-6 py-4 border-b">
+              <h3 className="text-xl font-bold text-gray-900">Contest Rules</h3>
+            </div>
+            <div className="px-6 py-5 space-y-3 text-gray-700">
+              <p>• Internet must be turned off during the contest</p>
+              <p>• Duration depends on the contest (e.g., 2–4 hours)</p>
+              <p>• Each problem has multiple test cases</p>
+              <p>• Code executes offline; submit only after all tests pass</p>
+              <p>• Violations may reduce your final score</p>
+            </div>
+            <div className="px-6 py-4 border-t flex justify-end gap-3">
+              <button
+                onClick={() => setShowRules(false)}
+                className="px-5 py-2 rounded-lg border text-gray-700 hover:bg-gray-50"
+              >
+                Close
+              </button>
+              <Link
+                to="/contests"
+                className="px-5 py-2 rounded-lg text-white bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700"
+                onClick={() => setShowRules(false)}
+              >
+                Browse Contests
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
