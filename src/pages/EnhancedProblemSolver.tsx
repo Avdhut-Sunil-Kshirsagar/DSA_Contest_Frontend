@@ -47,6 +47,7 @@ const EnhancedProblemSolver: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [contestStarted, setContestStarted] = useState<boolean>(false);
+  const [totalPossibleScore, setTotalPossibleScore] = useState<number>(0);
 
   // Internet monitoring
   const [internetStatus, setInternetStatus] = useState<InternetStatus>(internetMonitor.getCurrentStatus());
@@ -175,8 +176,8 @@ const EnhancedProblemSolver: React.FC = () => {
         const seconds = Math.max(1, Math.floor(durationMs / 1000));
         setTimeLeft(seconds);
       } else if (timeLeft === 0) {
-        // Fallback default 90 minutes only if not set by saved state
-        setTimeLeft(5400);
+        // Fallback default 120 minutes to match preparation page display
+        setTimeLeft(7200);
       }
 
       // Normalize problems from cache or API
@@ -192,6 +193,9 @@ const EnhancedProblemSolver: React.FC = () => {
         .filter((p: any) => p && (p._id || p.id) && p.title);
 
       setProblems(normalized);
+      // Capture contest total possible score if provided by backend
+      const tps = Number((data as any)?.totalPossibleScore) || 0;
+      setTotalPossibleScore(tps);
       setCurrentProblemIndex(0);
 
       if (normalized.length > 0) {
@@ -258,7 +262,7 @@ const EnhancedProblemSolver: React.FC = () => {
         setCurrentProblemIndex(0);
         setProblemResults([]);
         setContestCompleted(false);
-        setTimeLeft((prev) => prev > 0 ? prev : 5400);
+        setTimeLeft((prev) => prev > 0 ? prev : 7200);
         setContestStartTime(Date.now());
         setViolationCount(0);
         setPenaltyPoints(0);
@@ -314,13 +318,14 @@ const EnhancedProblemSolver: React.FC = () => {
           }
         }
       } else {
-        setTimeLeft((prev) => prev > 0 ? prev : 5400);
+        setTimeLeft((prev) => prev > 0 ? prev : 7200);
         if (!contestStarted) {
           startContest();
         }
       }
     } else if (user?.id) {
-      setTimeLeft((prev) => prev > 0 ? prev : 5400);
+        setTimeLeft((prev) => prev > 0 ? prev : 7200);
+      setTimeLeft((prev) => prev > 0 ? prev : 7200);
       if (!contestStarted) {
         startContest();
       }
@@ -494,7 +499,7 @@ const EnhancedProblemSolver: React.FC = () => {
     setOutput('Running...');
 
     try {
-      const tests = (problem.testCases || []).slice(0, 2);
+      const tests = (problem.testCases || []);
       const rawHarness: any = (problem as any).harshnessCode || (problem as any).harnessCode || '';
       let harnessToUse = '';
       if (rawHarness && typeof rawHarness === 'object') {
@@ -555,9 +560,15 @@ const EnhancedProblemSolver: React.FC = () => {
       }
       const safeResults: ExecutionResult[] = Array.isArray(resultsToUse) ? resultsToUse : [];
 
-      const passedTests = safeResults.filter(r => r.passed).length;
-      const totalTests = safeResults.length;
-      const score = totalTests > 0 ? Math.round((passedTests / totalTests) * 100) : 0;
+      // Score using per-test-case points if available; fallback to even distribution over 100
+      const ptsArray: number[] = Array.isArray((problem as any).testCases)
+        ? ((problem as any).testCases as any[]).map(tc => Number(tc.points) || 0)
+        : [];
+      const perProblemMax = ptsArray.length > 0 ? ptsArray.reduce((s, p) => s + p, 0) : 100;
+      const score = safeResults.reduce((sum, r, idx) => {
+        const pts = ptsArray.length > 0 ? (ptsArray[idx] || 0) : (100 / Math.max(1, safeResults.length));
+        return sum + (r.passed ? pts : 0);
+      }, 0);
 
       const currentTime = Date.now();
       const timeTaken = currentTime - contestStartTime;
@@ -581,7 +592,7 @@ const EnhancedProblemSolver: React.FC = () => {
 
       setProblemResults(existingResults);
 
-      toast.success(`✅ Problem ${problem.title} completed! Score: ${score}/100`);
+      toast.success(`✅ Problem ${problem.title} completed! Score: ${Math.round(score)}/${perProblemMax}`);
 
       if (currentProblemIndex >= 2 || existingResults.length >= problems.length) {
         setTimeout(() => {
@@ -1275,7 +1286,7 @@ const EnhancedProblemSolver: React.FC = () => {
                 <div className="space-y-3 text-sm">
                   <div className="flex justify-between items-center">
                     <span className="text-gray-300">Total Score:</span>
-                    <span className="font-bold text-white text-lg">{problemResults.reduce((sum, result) => sum + result.score, 0)}/300</span>
+                    <span className="font-bold text-white text-lg">{problemResults.reduce((sum, result) => sum + (Number(result.score) || 0), 0)}/{totalPossibleScore || 100 * Math.max(1, problems.length)}</span>
                   </div>
                   <div className="flex justify-between items-center text-red-400">
                     <span className="text-gray-300">Penalty Points:</span>
@@ -1283,11 +1294,11 @@ const EnhancedProblemSolver: React.FC = () => {
                   </div>
                   <div className="flex justify-between items-center border-t border-white/20 pt-3">
                     <span className="font-bold text-white text-lg">Final Score:</span>
-                    <span className={`font-bold text-2xl ${(problemResults.reduce((sum, result) => sum + result.score, 0) - penaltyPoints) < 0
+                    <span className={`font-bold text-2xl ${(problemResults.reduce((sum, result) => sum + (Number(result.score) || 0), 0) - penaltyPoints) < 0
                         ? 'text-red-400'
                         : 'text-green-400'
                       }`}>
-                      {problemResults.reduce((sum, result) => sum + result.score, 0) - penaltyPoints}/300
+                      {problemResults.reduce((sum, result) => sum + (Number(result.score) || 0), 0) - penaltyPoints}/{totalPossibleScore || 100 * Math.max(1, problems.length)}
                     </span>
                   </div>
                 </div>
