@@ -251,7 +251,7 @@ const ContestPage: React.FC = () => {
               <Clock className="h-5 w-5 text-blue-500" />
               <div>
                 <p className="text-sm text-gray-600">Duration</p>
-                <p className="font-medium">{Math.round((contest?.duration || 7200000)/3600000)} Hours</p>
+                <p className="font-medium">{Math.round(((typeof contest?.duration !== 'number' ? contest?.duration : 7200000)/3600000))} Hours</p>
               </div>
             </div>
             <div className="flex items-center space-x-3">
